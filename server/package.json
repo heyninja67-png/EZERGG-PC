@@ -1,8 +1,11 @@
 {
-  "name": "nevoz-setup-api",
-  "version": "0.6.0",
+  "name": "nevoz-setup-provider",
+  "version": "0.7.0",
   "private": true,
   "type": "module",
   "engines": { "node": ">=22" },
-  "scripts": { "start": "node src/server.js", "test": "node --test" }
+  "scripts": { "start": "node src/server.js", "test": "node --test" },
+  "dependencies": {
+    "@novnc/novnc": "1.7.0"
+  }
 }

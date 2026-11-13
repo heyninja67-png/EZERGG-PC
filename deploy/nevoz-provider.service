@@ -1,0 +1,26 @@
+[Unit]
+Description=NEVOZ SETUP - Cloud PC Provider
+Wants=network-online.target
+After=network-online.target libvirtd.service
+Requires=libvirtd.service
+
+[Service]
+Type=simple
+User=nevoz
+Group=libvirt-qemu
+SupplementaryGroups=libvirt kvm
+WorkingDirectory=/opt/nevoz-provider
+Environment=NODE_ENV=production
+EnvironmentFile=-/etc/nevoz-provider.env
+ExecStart=/usr/bin/node /opt/nevoz-provider/src/server.js
+Restart=always
+RestartSec=5
+UMask=0007
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/var/lib/nevoz-provider /var/lib/libvirt/images/nevoz
+
+[Install]
+WantedBy=multi-user.target

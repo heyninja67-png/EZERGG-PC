@@ -8,11 +8,16 @@ android {
     compileSdk = 35
 
     defaultConfig {
+        val apiBaseUrl = providers.gradleProperty("NEVOZ_API_BASE_URL").filter { it.isNotBlank() }
+            .orElse(providers.environmentVariable("NEVOZ_API_BASE_URL").filter { it.isNotBlank() })
+            .getOrElse("https://api.nevoz.invalid")
+        val escapedApiBaseUrl = apiBaseUrl.replace("\\", "\\\\").replace("\"", "\\\"")
+        buildConfigField("String", "API_BASE_URL", "\"$escapedApiBaseUrl\"")
         applicationId = "com.nevoz.setup"
         minSdk = 26
         targetSdk = 35
-        versionCode = 6
-        versionName = "0.6.0"
+        versionCode = 7
+        versionName = "0.7.0"
     }
 
     buildTypes {
@@ -28,7 +33,7 @@ android {
         }
     }
 
-    buildFeatures { compose = true }
+    buildFeatures { compose = true; buildConfig = true }
     composeOptions { kotlinCompilerExtensionVersion = "1.5.14" }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

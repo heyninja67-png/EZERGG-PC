@@ -3,10 +3,15 @@
     <application
         android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher"
         android:label="NEVOZ SETUP"
         android:supportsRtl="true"
         android:theme="@style/Theme.Nevoz"
         android:usesCleartextTraffic="false">
+        <activity
+            android:name=".RemoteDesktopActivity"
+            android:exported="false"
+            android:label="NEVOZ Desktop" />
         <activity
             android:name=".MainActivity"
             android:exported="true">

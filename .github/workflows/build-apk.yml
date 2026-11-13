@@ -37,7 +37,14 @@ jobs:
         with:
           gradle-version: '8.9'
       - name: Build debug APK
-        run: gradle assembleDebug --stacktrace
+        env:
+          NEVOZ_API_BASE_URL: ${{ vars.NEVOZ_API_BASE_URL }}
+        run: |
+          if [ -z "$NEVOZ_API_BASE_URL" ]; then
+            echo "::error::Cadastre a variável NEVOZ_API_BASE_URL com seu domínio HTTPS antes de gerar o APK."
+            exit 1
+          fi
+          gradle assembleDebug --stacktrace
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:

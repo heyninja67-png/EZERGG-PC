@@ -1,7 +1,6 @@
 <resources>
-    <color name="nevoz_navy">#070B1C</color>
-    <color name="nevoz_blue">#12B8F5</color>
-    <color name="nevoz_purple">#713BFF</color>
-    <color name="nevoz_cyan">#45E5FF</color>
-    <color name="nevoz_white">#F4F7FF</color>
+    <color name="nevoz_black">#05080B</color>
+    <color name="nevoz_surface">#0D141A</color>
+    <color name="nevoz_cyan">#16D9F5</color>
+    <color name="nevoz_white">#F2FAFC</color>
 </resources>

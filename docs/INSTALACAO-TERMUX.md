@@ -1,26 +1,20 @@
-# Substituir o projeto no Termux
+# Android/Termux e compilação do APK
 
-> Faça backup antes. Os comandos abaixo removem todos os arquivos do diretório `ezerGGPC`, exceto a pasta `.git`, para preservar o vínculo com o GitHub. Eles também removem `apps/web` e qualquer código antigo que esteja dentro desse diretório.
+Termux pode ser usado como ambiente de desenvolvimento para editar o projeto e executar os testes Node.js. Ele não transforma um celular Android em um host Windows KVM.
 
-1. Baixe `NEVOZ-SETUP-v0.6.zip` para `~/storage/downloads/`.
-2. No Termux, execute:
+## Compilar o APK
 
-```bash
-cd ~/projects/ezerGGPC
-cp -r . ../ezerGGPC-backup-v05
-find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
-unzip -o ~/storage/downloads/NEVOZ-SETUP-v0.6.zip -d .
-git status
-```
-
-3. Revise os arquivos e envie a substituição:
+Configure o endereço central do serviço na máquina que compila o app:
 
 ```bash
-git add -A
-git commit -m "Substitui projeto pelo NEVOZ SETUP v0.6"
-git push origin main
+export NEVOZ_API_BASE_URL="https://api.seudominio.com"
+gradle assembleDebug
 ```
 
-4. Abra GitHub → Actions e baixe o artifact `nevoz-setup-apk` quando a compilação ficar verde.
+O APK é salvo em `app/build/outputs/apk/debug/app-debug.apk`.
 
-A pasta `.git` é preservada, por isso o novo projeto continua conectado ao repositório atual. O backup fica em `~/projects/ezerGGPC-backup-v05`. Não execute a remoção se houver alterações locais importantes que ainda não estejam no backup.
+## Onde executar o provedor
+
+Execute `deploy/install-host.sh` em um servidor Linux x86_64 dedicado com VT-x/AMD-V. Não execute o instalador no Termux do Android: o ambiente não fornece o hipervisor KVM x86_64 necessário para executar Windows 11 de verdade.
+
+Consulte `docs/PROVEDOR-NEVOZ.md` para criar o host e publicar a API.

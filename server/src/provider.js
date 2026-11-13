@@ -1,133 +1,178 @@
+import { spawn } from "node:child_process";
+import { access, mkdir, unlink, writeFile } from "node:fs/promises";
+import { constants as fsConstants, existsSync } from "node:fs";
+import path from "node:path";
+import { randomBytes } from "node:crypto";
+
 export class ProviderError extends Error {
   constructor(message, status = 502) { super(message); this.status = status; }
 }
 
-export class UnconfiguredProvider {
-  constructor() { this.ready = false; this.name = "none"; }
-  info() { return { ready: false, name: this.name, message: "Nenhum provedor configurado. Configure NEVOZ_PROVIDER e as credenciais no backend." }; }
-  async createMachine() { throw new ProviderError("Provisionamento indisponível: nenhum provedor está configurado no servidor.", 503); }
-  async getStatus() { throw new ProviderError("Nenhum provedor configurado.", 503); }
-  async start() { throw new ProviderError("Nenhum provedor configurado.", 503); }
-  async stop() { throw new ProviderError("Nenhum provedor configurado.", 503); }
-  async remove() { throw new ProviderError("Nenhum provedor configurado.", 503); }
+function run(command, args, timeoutMs = 120000) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    const timer = setTimeout(() => child.kill("SIGKILL"), timeoutMs);
+    child.stdout.setEncoding("utf8").on("data", chunk => { stdout += chunk; });
+    child.stderr.setEncoding("utf8").on("data", chunk => { stderr += chunk; });
+    child.on("error", error => { clearTimeout(timer); reject(new ProviderError(`Não foi possível executar ${command}: ${error.message}`, 503)); });
+    child.on("close", code => {
+      clearTimeout(timer);
+      if (code === 0) resolve(stdout.trim());
+      else reject(new ProviderError((stderr || stdout || `${command} terminou com código ${code}`).trim().slice(0, 700), 502));
+    });
+  });
 }
 
-export class ProxmoxProvider {
-  constructor(config, connectionUrlTemplate = "") {
+const xml = value => String(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll("'", "&apos;").replaceAll('"', "&quot;");
+const slug = value => String(value).toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 30) || "nevoz-pc";
+const validPci = value => /^\d{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.\d$/.test(String(value || ""));
+
+export class LibvirtProvider {
+  constructor(config, catalog) {
     this.config = config;
-    this.connectionUrlTemplate = connectionUrlTemplate;
-    this.name = "proxmox";
-    this.ready = Boolean(config.url && config.tokenId && config.tokenSecret && config.node && Object.keys(config.templateMap).length);
+    this.catalog = catalog;
+    this.name = "nevoz-kvm";
+    this.templatesReady = catalog.operatingSystems.every(os => {
+      const template = config.templates[os.id];
+      return typeof template === "string" && template.length > 0 && existsSync(template);
+    });
+    this.storageReady = existsSync(config.imagesDir);
+    this.kvmAvailable = existsSync("/dev/kvm");
+    this.ready = this.templatesReady && this.storageReady && this.kvmAvailable;
   }
 
   info() {
-    return {
-      ready: this.ready,
-      name: this.name,
-      message: this.ready
-        ? "Proxmox configurado. A conexão/autorização será confirmada ao executar a primeira operação."
-        : "Proxmox selecionado, mas faltam URL, token, nó ou mapa de templates no backend."
-    };
+    let message = "Provedor NEVOZ local pronto. As máquinas são executadas em KVM/libvirt neste servidor.";
+    if (!this.kvmAvailable) message = "KVM não está disponível em /dev/kvm. Use um host Linux x86_64 com virtualização habilitada.";
+    else if (!this.storageReady) message = "A pasta persistente das máquinas não existe no servidor.";
+    else if (!this.templatesReady) message = "Faltam uma ou mais imagens-base licenciadas do Windows. Consulte docs/PROVEDOR-NEVOZ.md.";
+    return { ready: this.ready, name: this.name, message };
   }
 
-  async request(path, method = "GET", body = undefined) {
-    if (!this.ready) throw new ProviderError("Configuração Proxmox incompleta no backend.", 503);
-    const headers = { Authorization: `PVEAPIToken=${this.config.tokenId}=${this.config.tokenSecret}` };
-    const options = { method, headers, signal: AbortSignal.timeout(45000) };
-    if (body) {
-      headers["Content-Type"] = "application/x-www-form-urlencoded";
-      options.body = new URLSearchParams(Object.entries(body).map(([k, v]) => [k, String(v)])).toString();
-    }
-    let response;
-    try { response = await fetch(`${this.config.url}/api2/json${path}`, options); }
-    catch (error) { throw new ProviderError(`Falha ao conectar ao Proxmox: ${error.message}`); }
-    const raw = await response.text();
-    let parsed = {};
-    try { parsed = raw ? JSON.parse(raw) : {}; } catch { /* erro tratado abaixo */ }
-    if (!response.ok) {
-      const detail = parsed.errors ? JSON.stringify(parsed.errors) : parsed.message || `HTTP ${response.status}`;
-      throw new ProviderError(`Proxmox respondeu com erro: ${detail}`, 502);
-    }
-    return parsed.data;
+  async command(args, timeoutMs) {
+    return run("virsh", ["-c", this.config.uri, ...args], timeoutMs);
   }
 
-  async waitTask(upid, timeoutMs = 600000) {
-    if (!upid || typeof upid !== "string") return;
-    const started = Date.now();
-    while (Date.now() - started < timeoutMs) {
-      const status = await this.request(`/nodes/${encodeURIComponent(this.config.node)}/tasks/${encodeURIComponent(upid)}/status`);
-      if (status.status === "stopped") {
-        if (status.exitstatus !== "OK") throw new ProviderError(`Tarefa Proxmox falhou: ${status.exitstatus || "sem detalhes"}`);
-        return;
-      }
-      await new Promise(resolve => setTimeout(resolve, 2500));
-    }
-    throw new ProviderError("Tempo limite aguardando a tarefa do Proxmox.", 504);
+  async assertHost() {
+    if (!this.ready) throw new ProviderError(this.info().message, 503);
+    await access("/dev/kvm", fsConstants.R_OK | fsConstants.W_OK).catch(() => {
+      throw new ProviderError("O usuário do serviço NEVOZ não pode acessar /dev/kvm. Confira o grupo kvm e reinicie o serviço.", 503);
+    });
+    await this.command(["nodeinfo"], 15000);
+    await run("qemu-img", ["--version"], 15000);
   }
 
   async createMachine(machine) {
-    const template = Number(this.config.templateMap[machine.os]);
-    if (!Number.isInteger(template) || template <= 0) throw new ProviderError(`Não há template Windows configurado para ${machine.osLabel}.`, 422);
-    const nextId = Number(await this.request("/cluster/nextid"));
-    if (!Number.isInteger(nextId) || nextId <= 0) throw new ProviderError("Proxmox não retornou um VMID válido.");
-    const name = machine.name.toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-").slice(0, 48) || `nevoz-${nextId}`;
-    if (machine.diskGb < this.config.templateDiskGb) throw new ProviderError(`O SSD solicitado (${machine.diskGb} GB) é menor que o disco-base do template (${this.config.templateDiskGb} GB).`, 422);
-    let cloneCompleted = false;
+    await this.assertHost();
+    const template = this.config.templates[machine.os];
+    if (!template || !existsSync(template)) throw new ProviderError(`O disco-base licenciado para ${machine.osLabel} não está instalado no servidor.`, 422);
+    const gpu = this.catalog.gpuProfiles[machine.gpuProfile];
+    if (!gpu) throw new ProviderError("Perfil de GPU inválido.", 422);
+    if (gpu.pciAddress && !validPci(gpu.pciAddress)) throw new ProviderError("Endereço PCI da GPU inválido no catálogo do provedor.", 422);
+
+    const domainName = `nevoz-${slug(machine.name)}-${randomBytes(3).toString("hex")}`;
+    const diskPath = path.join(this.config.imagesDir, `${domainName}.qcow2`);
+    let defined = false;
     try {
-      const cloneBody = { newid: nextId, name, target: this.config.node, full: 1 };
-      if (this.config.storage) cloneBody.storage = this.config.storage;
-      const cloneTask = await this.request(`/nodes/${encodeURIComponent(this.config.node)}/qemu/${template}/clone`, "POST", cloneBody);
-      await this.waitTask(cloneTask);
-      cloneCompleted = true;
-      const cfg = { name, cores: machine.vCpu, sockets: 1, memory: machine.ramGb * 1024 };
-      if (this.config.bridge) cfg.net0 = `virtio,bridge=${this.config.bridge}`;
-      const gpu = this.config.gpuProfiles?.[machine.gpuProfile];
-      if (gpu?.hostpci) cfg.hostpci0 = gpu.hostpci;
-      await this.request(`/nodes/${encodeURIComponent(this.config.node)}/qemu/${nextId}/config`, "PUT", cfg);
-      const extraDisk = machine.diskGb - this.config.templateDiskGb;
-      if (extraDisk > 0) {
-        const resizeTask = await this.request(`/nodes/${encodeURIComponent(this.config.node)}/qemu/${nextId}/resize`, "PUT", {
-          disk: "scsi0", size: `+${extraDisk}G`
-        });
-        await this.waitTask(resizeTask);
-      }
-      const startTask = await this.request(`/nodes/${encodeURIComponent(this.config.node)}/qemu/${nextId}/status/start`, "POST", {});
-      await this.waitTask(startTask);
-      return { providerId: String(nextId), state: "running" };
+      await mkdir(this.config.imagesDir, { recursive: true });
+      await access(template, fsConstants.R_OK);
+      const info = JSON.parse(await run("qemu-img", ["info", "--output=json", template], 30000));
+      const backingFormat = info.format || "qcow2";
+      await run("qemu-img", ["create", "-f", "qcow2", "-F", backingFormat, "-b", template, diskPath, `${machine.diskGb}G`], 120000);
+      const pciXml = gpu.pciAddress ? this.pciXml(gpu.pciAddress) : "";
+      const tpmXml = this.config.tpm ? "<tpm model='tpm-crb'><backend type='emulator' version='2.0'/></tpm>" : "";
+      const domainXml = this.domainXml({ domainName, diskPath, machine, pciXml, tpmXml });
+      const xmlPath = path.join(this.config.imagesDir, `${domainName}.xml`);
+      await writeFile(xmlPath, domainXml, { mode: 0o640 });
+      try { await this.command(["define", xmlPath], 30000); }
+      finally { await unlink(xmlPath).catch(() => {}); }
+      defined = true;
+      await this.command(["start", domainName], 60000);
+      return { providerId: domainName, state: "running" };
     } catch (error) {
-      if (cloneCompleted) error.providerId = String(nextId);
+      if (defined) await this.command(["undefine", domainName, "--nvram"], 30000).catch(() => {});
+      await unlink(diskPath).catch(() => {});
       throw error;
     }
   }
 
+  domainXml({ domainName, diskPath, machine, pciXml, tpmXml }) {
+    const memoryKiB = machine.ramGb * 1024 * 1024;
+    return `<?xml version='1.0' encoding='UTF-8'?>
+<domain type='kvm'>
+  <name>${xml(domainName)}</name>
+  <memory unit='KiB'>${memoryKiB}</memory>
+  <currentMemory unit='KiB'>${memoryKiB}</currentMemory>
+  <vcpu placement='static'>${machine.vCpu}</vcpu>
+  <os firmware='efi'>
+    <type arch='x86_64' machine='q35'>hvm</type>
+    <firmware><feature enabled='yes' name='secure-boot'/><feature enabled='yes' name='enrolled-keys'/></firmware>
+    <boot dev='hd'/>
+  </os>
+  <features><acpi/><apic/><smm state='on'/></features>
+  <cpu mode='host-passthrough' check='none'/>
+  <clock offset='localtime'/>
+  <on_poweroff>destroy</on_poweroff><on_reboot>restart</on_reboot><on_crash>restart</on_crash>
+  <devices>
+    <disk type='file' device='disk'><driver name='qemu' type='qcow2' cache='none'/><source file='${xml(diskPath)}'/><target dev='vda' bus='virtio'/></disk>
+    <interface type='network'><source network='${xml(this.config.network)}'/><model type='virtio'/></interface>
+    <graphics type='vnc' port='-1' autoport='yes' listen='127.0.0.1'/>
+    <video><model type='virtio' heads='1' primary='yes'/></video>
+    <memballoon model='virtio'/>
+    ${tpmXml}
+    ${pciXml}
+  </devices>
+</domain>`;
+  }
+
+  pciXml(address) {
+    const [domain, bus, slotFunction] = address.split(":");
+    const [slot, fn] = slotFunction.split(".");
+    return `<hostdev mode='subsystem' type='pci' managed='yes'><source><address domain='0x${domain}' bus='0x${bus}' slot='0x${slot}' function='0x${fn}'/></source></hostdev>`;
+  }
+
   async getStatus(providerId) {
-    const status = await this.request(`/nodes/${encodeURIComponent(this.config.node)}/qemu/${encodeURIComponent(providerId)}/status/current`);
-    return status.status === "running" ? "running" : status.status === "stopped" ? "stopped" : status.status || "unknown";
+    const raw = await this.command(["domstate", providerId], 15000);
+    const state = raw.toLowerCase();
+    if (state.includes("running")) return "running";
+    if (state.includes("shut off") || state.includes("shutoff")) return "stopped";
+    if (state.includes("paused")) return "paused";
+    if (state.includes("crashed")) return "error";
+    if (state.includes("in shutdown")) return "stopping";
+    return state.replace(/\s+/g, "-") || "unknown";
   }
+
   async start(providerId) {
-    const task = await this.request(`/nodes/${encodeURIComponent(this.config.node)}/qemu/${encodeURIComponent(providerId)}/status/start`, "POST", {});
-    await this.waitTask(task);
+    await this.command(["start", providerId], 60000);
     return this.getStatus(providerId);
   }
+
   async stop(providerId) {
-    const task = await this.request(`/nodes/${encodeURIComponent(this.config.node)}/qemu/${encodeURIComponent(providerId)}/status/shutdown`, "POST", {});
-    await this.waitTask(task);
-    return this.getStatus(providerId);
+    await this.command(["shutdown", providerId], 30000);
+    return "stopping";
   }
+
   async remove(providerId) {
-    const task = await this.request(`/nodes/${encodeURIComponent(this.config.node)}/qemu/${encodeURIComponent(providerId)}`, "DELETE", { purge: 1, "destroy-unreferenced-disks": 1 });
-    await this.waitTask(task);
+    const diskPath = path.join(this.config.imagesDir, `${providerId}.qcow2`);
+    const state = await this.getStatus(providerId).catch(() => "missing");
+    if (state === "running" || state === "paused" || state === "stopping") await this.command(["destroy", providerId], 30000).catch(() => {});
+    await this.command(["undefine", providerId, "--nvram"], 30000).catch(async () => this.command(["undefine", providerId], 30000));
+    await unlink(diskPath).catch(error => { if (error.code !== "ENOENT") throw error; });
   }
-  connectionUrl(providerId) {
-    if (!this.connectionUrlTemplate) return "";
-    return this.connectionUrlTemplate.replaceAll("{vmid}", encodeURIComponent(providerId));
+
+  async consoleTarget(providerId) {
+    const raw = await this.command(["vncdisplay", providerId], 15000);
+    const match = raw.match(/:(\d+)$/);
+    if (!match) throw new ProviderError("O QEMU não informou uma tela VNC para esta máquina.", 503);
+    const displayOrPort = Number(match[1]);
+    const port = displayOrPort < 5900 ? 5900 + displayOrPort : displayOrPort;
+    if (!Number.isInteger(port) || port < 5900 || port > 6999) throw new ProviderError("Porta VNC local inválida.", 503);
+    return { host: "127.0.0.1", port };
   }
 }
 
 export function createProvider(config) {
-  if (config.providerName === "proxmox") {
-    const p = new ProxmoxProvider({ ...config.proxmox, gpuProfiles: config.catalog.gpuProfiles }, config.connectionUrlTemplate);
-    return p;
-  }
-  return new UnconfiguredProvider();
+  return new LibvirtProvider(config.libvirt, config.catalog);
 }

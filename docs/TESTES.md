@@ -13,4 +13,4 @@ npm test
 
 O GitHub Actions instala Java 17, Android SDK API 35 e Gradle 8.9, compila `assembleDebug` e publica `nevoz-setup-apk` como artifact.
 
-O primeiro build deve ser verificado no Actions. O ambiente deste pacote não contém um Android SDK/Gradle local para gerar o APK dentro do arquivo ZIP.
+O primeiro build deve ser verificado no Actions. No ambiente de montagem deste ZIP não há Android SDK/Gradle local; o APK precisa ser compilado no GitHub Actions ou em uma máquina com Android SDK/Gradle.

@@ -1,34 +1,29 @@
-# NEVOZ SETUP 0.6 — arquitetura
+# Arquitetura NEVOZ SETUP 0.7
 
-## O que esta versão faz
+## Fluxo
 
-- O aplicativo Android deixa de tratar um perfil local como se fosse um PC criado.
-- O app configura uma URL HTTPS, pareia o dispositivo com um código de uso administrativo e recebe um token revogável por dispositivo.
-- A API mantém o inventário de máquinas em um volume persistente no servidor.
-- O provider padrão é `none`: ele responde de forma explícita que o provisionamento está indisponível. Não inventa GPU, IP, Windows ou estado ONLINE.
-- Há um adaptador inicial para Proxmox VE que clona um template Windows, aplica CPU/RAM, aumenta o disco configurado e inicia a VM.
-- A conexão remota só aparece quando `NEVOZ_CONNECTION_URL_TEMPLATE` aponta para um gateway RDP/HTML5 que você tenha implantado e protegido.
+1. O usuário instala e abre o app. O Android gera um UUID e um segredo de dispositivo; ambos ficam no armazenamento privado do app.
+2. O app chama `/api/device/bootstrap` automaticamente. Não há campo de URL, chave API ou código de pareamento na interface.
+3. As ações seguem por HTTPS para a API central NEVOZ.
+4. A API valida o dispositivo, aplica quotas e guarda o estado em JSON persistente.
+5. O `LibvirtProvider` chama `virsh` e `qemu-img` localmente no servidor físico.
+6. Cada máquina usa um overlay QCOW2 próprio sobre uma imagem-base Windows licenciada.
+7. Para conectar, o app solicita um ticket HMAC de curta duração. O backend abre um túnel WebSocket autenticado até o VNC de loopback da VM e serve noVNC dentro do próprio app; a porta VNC nunca é publicada na internet.
 
-## O que ainda depende da infraestrutura do operador
+## Separação de responsabilidades
 
-1. Um servidor Proxmox VE com recursos de CPU, RAM, armazenamento e rede.
-2. Templates separados para as edições Windows que serão ofertadas, com licença válida, VirtIO drivers, QEMU Guest Agent e acesso remoto já preparado.
-3. GPU física/vGPU instalada e configurada no host. PCI passthrough depende de suporte IOMMU do hardware, grupos IOMMU e configuração do host.
-4. Um gateway remoto seguro, por exemplo Apache Guacamole ou outro serviço compatível, exposto via HTTPS.
-5. DNS, TLS válido, firewall, monitoramento, backups e política de uso/custos.
+- `app/`: dashboard, catálogo de recursos, gerenciamento e ações.
+- `server/src/server.js`: API HTTP, cadastro automático da instalação, autorização, quotas e persistência do catálogo de VMs.
+- `server/src/provider.js`: integração local com libvirt/KVM; nenhum serviço Cloud externo é chamado.
+- `server/src/store.js`: armazenamento atômico do estado do serviço.
+- `deploy/`: serviço systemd, instalador de host e exemplo de proxy HTTPS com WebSocket.
 
-O APK e o backend não podem criar hardware que o host não possui. Opções no catálogo são limites/configuração do produto, não garantia de capacidade do servidor.
+## Persistência
 
-## Segurança
+O registro da VM fica em `/var/lib/nevoz-provider/state.json`. Seu disco de usuário fica em `/var/lib/libvirt/images/nevoz/<vm>.qcow2`. O disco-base Windows permanece em `nevoz-templates/`; cada overlay é independente e preserva as gravações da VM. `stop` não apaga o disco. `DELETE` remove o domínio e seu overlay.
 
-- Não coloque o token do Proxmox, segredo de API ou pairing code dentro do APK ou no Git.
-- `.env` é ignorado pelo Git. Preencha `.env.example` em um arquivo `.env` privado no servidor.
-- Use um token Proxmox com privilégios mínimos, restrito ao pool/nó/VMs necessárias.
-- Use certificado TLS confiável no endpoint Proxmox. Não desabilite a verificação TLS em produção.
-- O pairing code é um segredo administrativo de uso inicial. Gere um código forte e troque-o após parear os dispositivos desejados.
-- Cada app recebe um token de dispositivo; no MVP ele fica no armazenamento privado do app. Revogue dispositivos removendo o respectivo hash em `/data/nevoz.json` e reiniciando o serviço.
-- Exponha a API atrás de um reverse proxy HTTPS, com rate limiting adicional, firewall e logs protegidos. O Compose só publica a porta em `127.0.0.1`.
+## Limites
 
-## Estado
+KVM/libvirt exige um host Linux x86_64 com virtualização de hardware. O recurso GPU é passthrough PCI opcional, dependente de IOMMU/VFIO e de uma GPU física compatível. A interface só oferece perfis que o administrador colocou no catálogo.
 
-`running` significa que o hypervisor reporta a VM como em execução; não prova que o Windows concluiu o boot nem que o desktop está pronto. A disponibilidade do botão Conectar depende de um gateway configurado.
+A tela remota usa noVNC servido pela própria API. O VNC criado para as VMs escuta apenas em loopback; o WebSocket faz a ponte após validar ticket de curta duração e dono da VM. O proxy HTTPS precisa aceitar Upgrade/WebSocket.
