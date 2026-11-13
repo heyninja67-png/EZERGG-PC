@@ -1,10 +1,9 @@
-FROM node:22-bookworm-slim
+FROM node:22-alpine
 WORKDIR /app
-RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ && rm -rf /var/lib/apt/lists/*
+ENV NODE_ENV=production
 COPY package.json ./
-RUN npm install --omit=dev
 COPY src ./src
-ENV PORT=3001
-ENV DB_PATH=/data/nevoz.sqlite
-EXPOSE 3001
-CMD ["npm","start"]
+RUN addgroup -S nevoz && adduser -S nevoz -G nevoz && mkdir -p /data && chown -R nevoz:nevoz /app /data
+USER nevoz
+EXPOSE 8080
+CMD ["node", "src/server.js"]

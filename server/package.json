@@ -1,14 +1,8 @@
 {
   "name": "nevoz-setup-api",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "private": true,
-  "type": "commonjs",
-  "scripts": {
-    "start": "node src/server.js"
-  },
-  "dependencies": {
-    "better-sqlite3": "^11.10.0",
-    "cors": "^2.8.5",
-    "express": "^5.1.0"
-  }
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": { "start": "node src/server.js", "test": "node --test" }
 }

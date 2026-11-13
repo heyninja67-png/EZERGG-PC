@@ -1,14 +1,22 @@
-# Secrets and local data
-.env
-server/data/
-*.sqlite
-*.sqlite-shm
-*.sqlite-wal
-
 # Android / Gradle
 .gradle/
-**/build/
+build/
+app/build/
 local.properties
-*.jks
-*.keystore
+*.iml
+.idea/
+
+# Node
 node_modules/
+npm-debug.log*
+
+# Secrets and local state
+.env
+.env.*
+!.env.example
+server/data/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,1 +1,0 @@
-A interface Android é composta por Views nativas (TextView, Button, layouts e diálogos). Os arquivos na pasta app/src/main/res/drawable são ilustrações PNG independentes. O wallpaper é usado somente como fundo. Nenhuma captura/tela composta ou sprite sheet é exibida como botão/cartão/tela.

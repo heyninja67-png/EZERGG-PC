@@ -1,6 +1,7 @@
-<?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="nevoz_cyan">#00D9FF</color>
-    <color name="nevoz_purple">#9B3BFF</color>
-    <color name="nevoz_track">#332A68</color>
+    <color name="nevoz_navy">#070B1C</color>
+    <color name="nevoz_blue">#12B8F5</color>
+    <color name="nevoz_purple">#713BFF</color>
+    <color name="nevoz_cyan">#45E5FF</color>
+    <color name="nevoz_white">#F4F7FF</color>
 </resources>

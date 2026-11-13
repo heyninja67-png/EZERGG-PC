@@ -1,559 +1,378 @@
 package com.nevoz.setup
 
-import android.app.AlertDialog
-import android.graphics.Color
-import android.graphics.Typeface
-import android.graphics.drawable.GradientDrawable
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
-import android.text.InputType
-import android.view.Gravity
-import android.view.View
-import android.view.animation.DecelerateInterpolator
-import android.widget.ArrayAdapter
-import android.widget.Button
-import android.widget.EditText
-import android.widget.FrameLayout
-import android.widget.ImageView
-import android.widget.LinearLayout
-import android.widget.ScrollView
-import android.widget.Spinner
-import android.widget.TextView
-import android.widget.Toast
-import androidx.appcompat.app.AppCompatActivity
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Terminal
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 
-class MainActivity : AppCompatActivity() {
-    private lateinit var db: PcDatabase
-    private lateinit var page: LinearLayout
-    private val white = Color.rgb(246, 247, 255)
-    private val muted = Color.rgb(163, 174, 218)
-    private val cyan = Color.rgb(0, 205, 255)
-    private val purple = Color.rgb(174, 55, 255)
-    private val panel = Color.argb(232, 9, 13, 38)
+private val Bg = Color(0xFF070B1C)
+private val Panel = Color(0xFF111936)
+private val Panel2 = Color(0xFF172247)
+private val Cyan = Color(0xFF45E5FF)
+private val Blue = Color(0xFF12B8F5)
+private val Purple = Color(0xFF713BFF)
+private val Muted = Color(0xFF9CAAD0)
+private val Good = Color(0xFF48E0B2)
 
+class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        db = PcDatabase(this)
-        window.statusBarColor = Color.rgb(4, 5, 17)
-        window.navigationBarColor = Color.rgb(4, 5, 17)
+        val prefs = AppPrefs(this)
+        setContent { NevozTheme { NevozApp(prefs) } }
+    }
+}
 
-        val root = FrameLayout(this)
-        root.addView(ImageView(this).apply {
-            setImageResource(R.drawable.nevoz_wallpaper)
-            scaleType = ImageView.ScaleType.CENTER_CROP
-            contentDescription = null
-        }, FrameLayout.LayoutParams(-1, -1))
-        root.addView(View(this).apply {
-            setBackgroundColor(Color.argb(176, 3, 5, 18))
-        }, FrameLayout.LayoutParams(-1, -1))
+@Composable
+private fun NevozTheme(content: @Composable () -> Unit) {
+    MaterialTheme(
+        colorScheme = darkColorScheme(
+            primary = Cyan, secondary = Purple, background = Bg, surface = Panel,
+            onPrimary = Bg, onBackground = Color.White, onSurface = Color.White
+        ), content = content
+    )
+}
 
-        val scroll = ScrollView(this).apply {
-            isFillViewport = true
-            clipToPadding = false
-            setPadding(0, 0, 0, 16)
+@Composable
+private fun NevozApp(prefs: AppPrefs) {
+    var page by remember { mutableStateOf("home") }
+    var baseUrl by remember { mutableStateOf(prefs.baseUrl) }
+    var token by remember { mutableStateOf(prefs.deviceToken) }
+    var catalog by remember { mutableStateOf<Catalog?>(null) }
+    var machines by remember { mutableStateOf<List<CloudMachine>>(emptyList()) }
+    var busy by remember { mutableStateOf(false) }
+    var message by remember { mutableStateOf("") }
+    val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+
+    fun refresh() {
+        if (baseUrl.isBlank() || token.isBlank()) return
+        scope.launch {
+            busy = true
+            try {
+                val api = NevozApi(baseUrl, token)
+                catalog = api.catalog()
+                machines = api.machines()
+                message = "Dados sincronizados com a NEVOZ API."
+            } catch (e: Exception) { message = e.message ?: "Falha ao sincronizar." }
+            finally { busy = false }
         }
-        page = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(18, 18, 18, 24)
-        }
-        scroll.addView(page)
-        root.addView(scroll, FrameLayout.LayoutParams(-1, -1))
-        setContentView(root)
-        renderDashboard()
+    }
 
-        // Restore cloud-synced profiles first; local records remain available offline.
-        NevozApi.pullPcs(this, db) {
-            runOnUiThread {
-                renderDashboard()
-                db.getPcs().forEach { NevozApi.syncPc(this, it) }
+    LaunchedEffect(baseUrl, token) { refresh() }
+    val provisioningInProgress = machines.any { it.state == "provisioning" || it.state == "starting" }
+    LaunchedEffect(baseUrl, token, provisioningInProgress) {
+        if (token.isNotBlank() && provisioningInProgress) {
+            while (true) {
+                delay(8000)
+                try { machines = NevozApi(baseUrl, token).machines() }
+                catch (e: Exception) { message = e.message ?: "Falha ao atualizar o estado do PC." }
             }
         }
     }
 
-    private fun renderDashboard() {
-        page.removeAllViews()
-        page.addView(header())
-        page.addView(space(20))
-        page.addView(hero())
-        page.addView(space(22))
-        page.addView(sectionHeader("MEUS CLOUD PCS", "SALVOS"))
-        page.addView(space(10))
-
-        val pcs = db.getPcs()
-        if (pcs.isEmpty()) {
-            page.addView(emptyState())
-        } else {
-            pcs.forEachIndexed { index, pc ->
-                val card = pcCard(pc)
-                card.alpha = 0f
-                card.translationY = 22f
-                page.addView(card)
-                card.animate().alpha(1f).translationY(0f)
-                    .setStartDelay((index * 75L).coerceAtMost(300L))
-                    .setDuration(420L)
-                    .setInterpolator(DecelerateInterpolator())
-                    .start()
-                page.addView(space(12))
+    Scaffold(
+        containerColor = Bg,
+        bottomBar = {
+            NavigationBar(containerColor = Color(0xFF0B1128), contentColor = Cyan) {
+                NavigationBarItem(selected = page == "home", onClick = { page = "home" }, icon = { Icon(Icons.Default.Home, null) }, label = { Text("Início") })
+                NavigationBarItem(selected = page == "create", onClick = { page = "create" }, icon = { Icon(Icons.Default.Add, null) }, label = { Text("Criar PC") })
+                NavigationBarItem(selected = page == "settings", onClick = { page = "settings" }, icon = { Icon(Icons.Default.Settings, null) }, label = { Text("Conexão") })
             }
         }
-
-        val create = primaryButton("＋   CRIAR CLOUD PC")
-        page.addView(create, LinearLayout.LayoutParams(-1, 54))
-        create.setOnClickListener { showCreateDialog() }
-
-        page.addView(space(22))
-        page.addView(sectionHeader("RECURSOS", "NEVOZ SETUP"))
-        page.addView(space(10))
-        page.addView(quickActions())
-        page.addView(space(17))
-        page.addView(persistenceCard())
-        page.addView(space(18))
-        page.addView(footer())
-    }
-
-    private fun header(): View {
-        val row = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        val logo = ImageView(this).apply {
-            setImageResource(R.drawable.nevoz_logo)
-            scaleType = ImageView.ScaleType.FIT_CENTER
-            contentDescription = "Logo NEVOZ SETUP"
-        }
-        row.addView(logo, LinearLayout.LayoutParams(62, 62))
-        val titleBox = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(12, 0, 0, 0)
-        }
-        titleBox.addView(text("NEVOZ SETUP", 18, white, true))
-        titleBox.addView(space(2))
-        titleBox.addView(text("CLOUD PC CONTROL", 9, muted, true))
-        row.addView(titleBox, LinearLayout.LayoutParams(0, -2, 1f))
-        val settings = smallIconButton("⚙")
-        row.addView(settings, LinearLayout.LayoutParams(44, 44))
-        settings.setOnClickListener { showSettingsDialog() }
-        return row
-    }
-
-    private fun hero(): View {
-        val outer = FrameLayout(this).apply {
-            background = gradient(intArrayOf(Color.rgb(6, 39, 82), Color.rgb(22, 13, 67), Color.rgb(9, 10, 36)), 23, cyan)
-            setPadding(18, 18, 18, 18)
-        }
-        val textBlock = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        textBlock.addView(text("SUA CENTRAL DE COMPUTAÇÃO", 9, Color.rgb(117, 226, 255), true))
-        textBlock.addView(space(7))
-        textBlock.addView(text("Seu mundo.\nSeu Cloud PC.", 22, white, true))
-        textBlock.addView(space(8))
-        textBlock.addView(text("Perfis e anotações salvos neste dispositivo.", 11, muted, false))
-        val cp = FrameLayout.LayoutParams(0, -2)
-        val textParams = FrameLayout.LayoutParams(-1, -2, Gravity.CENTER_VERTICAL)
-        textParams.rightMargin = 132
-        outer.addView(textBlock, textParams)
-
-        val art = ImageView(this).apply {
-            setImageResource(R.drawable.art_pc_tower)
-            scaleType = ImageView.ScaleType.FIT_CENTER
-            contentDescription = "Ilustração isolada de computador gamer"
-        }
-        val artParams = FrameLayout.LayoutParams(136, 160, Gravity.RIGHT or Gravity.CENTER_VERTICAL)
-        artParams.rightMargin = -7
-        outer.addView(art, artParams)
-        return outer
-    }
-
-    private fun pcCard(pc: CloudPc): View {
-        val card = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            background = rounded(panel, 21, Color.rgb(56, 71, 149), 1)
-            setPadding(15, 15, 15, 15)
-        }
-
-        val top = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        val name = text(pc.name, 15, white, true)
-        top.addView(name, LinearLayout.LayoutParams(0, -2, 1f))
-        val badge = TextView(this).apply {
-            text = "● PERFIL SALVO"
-            textSize = 9f
-            letterSpacing = .03f
-            setTextColor(Color.rgb(85, 240, 190))
-            background = rounded(Color.argb(38, 0, 220, 170), 15, Color.argb(150, 0, 220, 170), 1)
-            setPadding(10, 7, 10, 7)
-        }
-        top.addView(badge)
-        card.addView(top)
-        card.addView(space(4))
-        card.addView(text("${pc.os}  •  ${pc.ramGb} GB RAM  •  ${pc.storageGb} GB SSD", 11, muted, false))
-        card.addView(space(13))
-
-        val hardware = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        hardware.addView(specChip("CPU", "8 vCPU"), LinearLayout.LayoutParams(0, -2, 1f))
-        hardware.addView(spaceWidth(6))
-        hardware.addView(specChip("GPU", pc.gpu), LinearLayout.LayoutParams(0, -2, 1f))
-        hardware.addView(spaceWidth(6))
-        hardware.addView(specChip("RAM", "${pc.ramGb} GB"), LinearLayout.LayoutParams(0, -2, 1f))
-        card.addView(hardware)
-        card.addView(space(10))
-        card.addView(text("DISCO ID: ${pc.volumeId.take(19)}…", 9, Color.rgb(112, 177, 226), false))
-        card.addView(space(8))
-        val progressLine = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        progressLine.addView(ImageView(this).apply {
-            setImageResource(R.drawable.ic_save)
-            imageTintList = android.content.res.ColorStateList.valueOf(Color.rgb(49, 230, 172))
-        }, LinearLayout.LayoutParams(17, 17))
-        progressLine.addView(text(
-            if (pc.progressNote.isBlank()) "Nenhum checkpoint salvo ainda" else "Último progresso: ${pc.progressNote.take(54)}",
-            10, Color.rgb(172, 234, 219), false
-        ).apply { setPadding(7, 0, 0, 0) })
-        card.addView(progressLine)
-        card.addView(space(13))
-
-        val actions = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        val save = secondaryButton("SALVAR PROGRESSO")
-        val connect = secondaryButton("CONECTAR")
-        actions.addView(save, LinearLayout.LayoutParams(0, 43, 1f).apply { marginEnd = 7 })
-        actions.addView(connect, LinearLayout.LayoutParams(0, 43, 1f))
-        save.setOnClickListener { showSaveProgressDialog(pc) }
-        connect.setOnClickListener { showProviderPendingDialog() }
-        card.addView(actions)
-        return card
-    }
-
-    private fun specChip(label: String, value: String): View {
-        val box = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            background = rounded(Color.argb(110, 22, 25, 66), 12, Color.argb(100, 75, 102, 180), 1)
-            setPadding(5, 9, 5, 9)
-        }
-        box.addView(text(label, 8, muted, true))
-        box.addView(space(3))
-        box.addView(text(value, 10, white, true))
-        return box
-    }
-
-    private fun emptyState(): View {
-        val box = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            background = rounded(Color.argb(185, 10, 13, 39), 20, Color.rgb(53, 67, 140), 1)
-            setPadding(18, 23, 18, 23)
-        }
-        val art = ImageView(this).apply {
-            setImageResource(R.drawable.art_cloud_servers)
-            scaleType = ImageView.ScaleType.FIT_CENTER
-            contentDescription = "Ilustração de servidores na nuvem"
-        }
-        box.addView(art, LinearLayout.LayoutParams(116, 104))
-        box.addView(space(8))
-        box.addView(text("Seu primeiro Cloud PC começa aqui", 15, white, true))
-        box.addView(space(5))
-        box.addView(text("Crie um perfil; ele ficará salvo mesmo depois de fechar o app.", 11, muted, false))
-        return box
-    }
-
-    private fun quickActions(): View {
-        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        row.addView(quickTile(R.drawable.ic_server, "Meus PCs"), LinearLayout.LayoutParams(0, 92, 1f).apply { marginEnd = 7 })
-        row.addView(quickTile(R.drawable.ic_storage, "Armazenamento"), LinearLayout.LayoutParams(0, 92, 1f).apply { marginEnd = 7 })
-        row.addView(quickTile(R.drawable.ic_settings, "Configurações"), LinearLayout.LayoutParams(0, 92, 1f))
-        return row
-    }
-
-    private fun quickTile(icon: Int, title: String): View {
-        val tile = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            background = rounded(Color.argb(215, 12, 15, 43), 15, Color.rgb(49, 63, 130), 1)
-            setPadding(5, 10, 5, 10)
-        }
-        val image = ImageView(this).apply {
-            setImageResource(icon)
-            imageTintList = android.content.res.ColorStateList.valueOf(cyan)
-        }
-        tile.addView(image, LinearLayout.LayoutParams(27, 27))
-        tile.addView(space(6))
-        tile.addView(text(title, 9, white, true))
-        tile.setOnClickListener {
-            if (title == "Configurações") showSettingsDialog()
-            else Toast.makeText(this, "Seus registros estão salvos no app.", Toast.LENGTH_SHORT).show()
-        }
-        return tile
-    }
-
-    private fun persistenceCard(): View {
-        val row = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            background = rounded(Color.argb(180, 5, 39, 49), 16, Color.rgb(0, 164, 165), 1)
-            setPadding(13, 13, 13, 13)
-        }
-        val icon = ImageView(this).apply {
-            setImageResource(R.drawable.ic_save)
-            imageTintList = android.content.res.ColorStateList.valueOf(Color.rgb(61, 239, 187))
-        }
-        row.addView(icon, LinearLayout.LayoutParams(29, 29))
-        val col = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(10, 0, 0, 0)
-        }
-        col.addView(text("PROGRESSO SALVO", 10, Color.rgb(89, 247, 198), true))
-        col.addView(space(3))
-        col.addView(text("Perfis e checkpoints ficam no SQLite local; sincronize com a API HTTPS para cópia no servidor.", 10, Color.rgb(191, 224, 224), false))
-        row.addView(col, LinearLayout.LayoutParams(0, -2, 1f))
-        return row
-    }
-
-    private fun footer(): View {
-        val box = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            setPadding(8, 6, 8, 8)
-        }
-        box.addView(text("NEVOZ SETUP  •  VERSÃO 0.5.0", 9, muted, true))
-        box.addView(space(4))
-        box.addView(text("PC Virtual criado por Nevoz Setup!!", 9, muted, false))
-        return box
-    }
-
-    private fun sectionHeader(title: String, subtitle: String): View {
-        val row = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        row.addView(text(title, 11, white, true), LinearLayout.LayoutParams(0, -2, 1f))
-        row.addView(text(subtitle, 9, cyan, true))
-        return row
-    }
-
-    private fun showCreateDialog() {
-        val form = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(20, 8, 20, 0)
-        }
-        val name = EditText(this).apply {
-            hint = "Nome do Cloud PC"
-            setSingleLine()
-            setTextColor(white)
-            setHintTextColor(muted)
-            background = rounded(Color.rgb(17, 20, 51), 12, Color.rgb(70, 91, 176), 1)
-            setPadding(13, 12, 13, 12)
-        }
-        val os = spinner(listOf("Windows 11", "Windows 11 Pro", "Windows 11 Enterprise"))
-        val ram = spinner(listOf("4 GB", "8 GB", "16 GB", "32 GB"))
-        val storage = spinner(listOf("100 GB", "200 GB", "500 GB", "1 TB", "2 TB"))
-        val gpu = spinner(listOf("Sem GPU", "NVIDIA GeForce", "AMD Radeon"))
-        form.addView(fieldLabel("Nome"))
-        form.addView(name)
-        form.addView(fieldLabel("Sistema operacional"))
-        form.addView(os)
-        form.addView(fieldLabel("Memória RAM"))
-        form.addView(ram)
-        form.addView(fieldLabel("Armazenamento"))
-        form.addView(storage)
-        form.addView(fieldLabel("Placa de vídeo"))
-        form.addView(gpu)
-
-        val scroll = ScrollView(this).apply { addView(form) }
-        AlertDialog.Builder(this)
-            .setTitle("Criar perfil de Cloud PC")
-            .setView(scroll)
-            .setNegativeButton("Cancelar", null)
-            .setPositiveButton("SALVAR PERFIL") { _, _ ->
-                val pcName = name.text.toString().trim().ifBlank { "NEVOZ-PC-${db.getPcs().size + 1}" }
-                val ramGb = ram.selectedItem.toString().substringBefore(" ").toInt()
-                val storageLabel = storage.selectedItem.toString()
-                val storageGb = when (storageLabel) {
-                    "1 TB" -> 1024
-                    "2 TB" -> 2048
-                    else -> storageLabel.substringBefore(" ").toInt()
+    ) { padding ->
+        Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0xFF101D47), Bg, Color(0xFF090D20)))).padding(padding)) {
+            Column(Modifier.fillMaxSize()) {
+                Header(onRefresh = { refresh() }, busy = busy)
+                AnimatedVisibility(visible = message.isNotBlank(), enter = fadeIn(), exit = fadeOut()) {
+                    Text(message, color = Muted, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp))
                 }
-                val pc = db.createPc(
-                    pcName,
-                    os.selectedItem.toString(),
-                    ramGb,
-                    storageGb,
-                    gpu.selectedItem.toString()
-                )
-                NevozApi.syncPc(this, pc)
-                renderDashboard()
-                Toast.makeText(this, "Perfil salvo neste dispositivo.", Toast.LENGTH_LONG).show()
-            }
-            .show()
-    }
-
-    private fun showSaveProgressDialog(pc: CloudPc) {
-        val input = EditText(this).apply {
-            hint = "Ex.: projeto aberto, última etapa, observações..."
-            setText(pc.progressNote)
-            setTextColor(white)
-            setHintTextColor(muted)
-            minLines = 3
-            maxLines = 5
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
-            background = rounded(Color.rgb(17, 20, 51), 12, Color.rgb(70, 91, 176), 1)
-            setPadding(13, 12, 13, 12)
-        }
-        AlertDialog.Builder(this)
-            .setTitle("Salvar progresso • ${pc.name}")
-            .setView(input)
-            .setNegativeButton("Cancelar", null)
-            .setPositiveButton("SALVAR CHECKPOINT") { _, _ ->
-                val note = input.text.toString().trim()
-                db.saveProgress(pc.id, note)
-                val updated = db.getPcs().firstOrNull { it.id == pc.id }
-                if (updated != null) {
-                    NevozApi.syncPc(this, updated)
-                    NevozApi.saveCheckpoint(this, updated, note)
-                }
-                renderDashboard()
-                Toast.makeText(this, "Checkpoint salvo localmente.", Toast.LENGTH_SHORT).show()
-            }
-            .show()
-    }
-
-    private fun showSettingsDialog() {
-        val form = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(20, 8, 20, 0)
-        }
-        val urlInput = EditText(this).apply {
-            hint = "https://api.seudominio.com"
-            setSingleLine()
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
-            setText(getSharedPreferences("nevoz_settings", MODE_PRIVATE).getString("api_base_url", ""))
-            setTextColor(white)
-            setHintTextColor(muted)
-            background = rounded(Color.rgb(17, 20, 51), 12, Color.rgb(70, 91, 176), 1)
-            setPadding(13, 12, 13, 12)
-        }
-        val tokenInput = EditText(this).apply {
-            hint = "Token privado da API (mínimo 32 caracteres)"
-            setSingleLine()
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
-            setText(getSharedPreferences("nevoz_settings", MODE_PRIVATE).getString("api_token", ""))
-            setTextColor(white)
-            setHintTextColor(muted)
-            background = rounded(Color.rgb(17, 20, 51), 12, Color.rgb(70, 91, 176), 1)
-            setPadding(13, 12, 13, 12)
-        }
-        form.addView(fieldLabel("URL HTTPS da API"))
-        form.addView(urlInput)
-        form.addView(fieldLabel("Token privado"))
-        form.addView(tokenInput)
-
-        AlertDialog.Builder(this)
-            .setTitle("Sincronização segura")
-            .setMessage("Sem API configurada, perfis e checkpoints continuam salvos no celular. Use HTTPS e um token privado forte.")
-            .setView(form)
-            .setNegativeButton("Cancelar", null)
-            .setPositiveButton("SALVAR") { _, _ ->
-                val url = urlInput.text.toString().trim().trimEnd('/')
-                val token = tokenInput.text.toString().trim()
-                if (url.isNotBlank() && !url.startsWith("https://", true)) {
-                    Toast.makeText(this, "Use uma URL HTTPS segura.", Toast.LENGTH_LONG).show()
-                } else if (url.isNotBlank() && token.length < 32) {
-                    Toast.makeText(this, "O token deve ter pelo menos 32 caracteres.", Toast.LENGTH_LONG).show()
-                } else {
-                    getSharedPreferences("nevoz_settings", MODE_PRIVATE).edit()
-                        .putString("api_base_url", url)
-                        .putString("api_token", token)
-                        .apply()
-                    db.getPcs().forEach { NevozApi.syncPc(this, it) }
-                    Toast.makeText(this, "Configuração salva.", Toast.LENGTH_SHORT).show()
+                when (page) {
+                    "create" -> CreatePage(catalog, busy, onCreate = { name, os, cpu, ram, disk, gpu ->
+                        scope.launch {
+                            busy = true
+                            try {
+                                val created = NevozApi(baseUrl, token).createMachine(name, os, cpu, ram, disk, gpu)
+                                machines = listOf(created) + machines
+                                message = "Solicitação enviada. Acompanhe o estado real do provisionamento."
+                                page = "home"
+                            } catch (e: Exception) { message = e.message ?: "Não foi possível criar o Cloud PC." }
+                            finally { busy = false }
+                        }
+                    }, onConfigure = { page = "settings" })
+                    "settings" -> SettingsPage(baseUrl, token.isNotBlank(), busy,
+                        onPair = { url, code ->
+                            scope.launch {
+                                busy = true
+                                try {
+                                    val newToken = NevozApi(url, "").pair(code, "Android NEVOZ")
+                                    token = newToken; prefs.baseUrl = url; prefs.deviceToken = newToken
+                                    baseUrl = url
+                                    message = "Dispositivo pareado com sucesso."
+                                    page = "home"
+                                } catch (e: Exception) { message = e.message ?: "Falha no pareamento." }
+                                finally { busy = false }
+                            }
+                        }, onUnpair = { prefs.clearToken(); token = ""; machines = emptyList(); message = "Dispositivo desconectado." })
+                    else -> HomePage(machines, catalog, busy,
+                        onCreate = { page = "create" }, onRefresh = { refresh() },
+                        onAction = { machine, action ->
+                            scope.launch {
+                                busy = true
+                                try {
+                                    val updated = NevozApi(baseUrl, token).action(machine.id, action)
+                                    machines = machines.map { if (it.id == updated.id) updated else it }
+                                    message = "Comando enviado: $action"
+                                } catch (e: Exception) { message = e.message ?: "Falha ao executar comando." }
+                                finally { busy = false }
+                            }
+                        }, onDelete = { machine ->
+                            scope.launch {
+                                busy = true
+                                try { NevozApi(baseUrl, token).delete(machine.id); machines = machines.filterNot { it.id == machine.id }; message = "Cloud PC removido." }
+                                catch (e: Exception) { message = e.message ?: "Falha ao excluir." }
+                                finally { busy = false }
+                            }
+                        }, onConnect = { url ->
+                            runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
+                                .onFailure { message = "Não foi possível abrir o cliente de conexão." }
+                        }, onSettings = { page = "settings" })
                 }
             }
-            .show()
-    }
-
-    private fun showProviderPendingDialog() {
-        AlertDialog.Builder(this)
-            .setTitle("Provedor de Cloud PC pendente")
-            .setMessage("O aplicativo já salva seus perfis e checkpoints, mas ainda não existe um provedor conectado para iniciar uma VM Windows real. O disco persistente de Windows só poderá ser criado e anexado depois da integração com o provedor.")
-            .setPositiveButton("Entendi", null)
-            .show()
-    }
-
-    private fun spinner(items: List<String>): Spinner {
-        val s = Spinner(this)
-        val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, items).apply {
-            setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+            if (busy) LinearProgressIndicator(Modifier.fillMaxWidth().align(Alignment.TopCenter), color = Cyan, trackColor = Color.Transparent)
         }
-        s.adapter = adapter
-        s.background = rounded(Color.rgb(17, 20, 51), 12, Color.rgb(70, 91, 176), 1)
-        return s
     }
+}
 
-    private fun fieldLabel(value: String) = text(value, 10, muted, true).apply { setPadding(2, 12, 2, 5) }
-
-    private fun primaryButton(value: String) = Button(this).apply {
-        text = value
-        isAllCaps = false
-        textSize = 12f
-        letterSpacing = .04f
-        setTextColor(white)
-        typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
-        background = gradient(intArrayOf(Color.rgb(0, 168, 255), Color.rgb(83, 43, 255), Color.rgb(181, 20, 235)), 16, cyan)
-        stateListAnimator = null
-        elevation = 4f
-    }
-
-    private fun secondaryButton(value: String) = Button(this).apply {
-        text = value
-        isAllCaps = false
-        textSize = 10f
-        letterSpacing = .025f
-        setTextColor(white)
-        background = rounded(Color.rgb(18, 22, 58), 13, Color.rgb(69, 84, 166), 1)
-        stateListAnimator = null
-    }
-
-    private fun smallIconButton(glyph: String) = TextView(this).apply {
-        text = glyph
-        textSize = 20f
-        gravity = Gravity.CENTER
-        setTextColor(cyan)
-        background = rounded(Color.argb(200, 15, 18, 50), 14, Color.rgb(58, 81, 159), 1)
-    }
-
-    private fun text(value: String, size: Int, color: Int, bold: Boolean): TextView =
-        TextView(this).apply {
-            text = value
-            textSize = size.toFloat()
-            setTextColor(color)
-            if (bold) typeface = Typeface.create("sans-serif", Typeface.BOLD)
+@Composable
+private fun Header(onRefresh: () -> Unit, busy: Boolean) {
+    Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 14.dp, top = 14.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(42.dp).clip(RoundedCornerShape(13.dp)).background(Brush.linearGradient(listOf(Blue, Purple))), contentAlignment = Alignment.Center) {
+            Text("N", color = Color.White, fontSize = 25.sp, fontWeight = FontWeight.Black)
         }
-
-    private fun rounded(color: Int, radius: Int, stroke: Int, strokeWidth: Int) =
-        GradientDrawable().apply {
-            setColor(color)
-            cornerRadius = radius.toFloat()
-            setStroke(strokeWidth, stroke)
+        Column(Modifier.weight(1f).padding(start = 11.dp)) {
+            Text("NEVOZ", color = Color.White, fontWeight = FontWeight.ExtraBold, fontSize = 22.sp, letterSpacing = 2.sp)
+            Text("CLOUD PC CONTROL", color = Cyan, fontWeight = FontWeight.SemiBold, fontSize = 10.sp, letterSpacing = 1.6.sp)
         }
-
-    private fun gradient(colors: IntArray, radius: Int, stroke: Int) =
-        GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, colors).apply {
-            cornerRadius = radius.toFloat()
-            setStroke(1, stroke)
-        }
-
-    private fun space(height: Int) = View(this).apply {
-        layoutParams = LinearLayout.LayoutParams(1, height)
+        IconButton(onClick = onRefresh, enabled = !busy) { Icon(Icons.Default.Refresh, "Atualizar", tint = Cyan) }
     }
+}
 
-    private fun spaceWidth(width: Int) = View(this).apply {
-        layoutParams = LinearLayout.LayoutParams(width, 1)
+@Composable
+private fun HomePage(
+    machines: List<CloudMachine>, catalog: Catalog?, busy: Boolean,
+    onCreate: () -> Unit, onRefresh: () -> Unit,
+    onAction: (CloudMachine, String) -> Unit, onDelete: (CloudMachine) -> Unit,
+    onConnect: (String) -> Unit, onSettings: () -> Unit
+) {
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(start = 18.dp, end = 18.dp, bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        item {
+            Card(shape = RoundedCornerShape(24.dp), colors = CardDefaults.cardColors(containerColor = Panel), border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF244C79))) {
+                Column(Modifier.fillMaxWidth().background(Brush.horizontalGradient(listOf(Color(0xFF10294D), Color(0xFF17143D)))).padding(20.dp)) {
+                    Text("SUA NUVEM. SEU CONTROLE.", color = Cyan, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
+                    Spacer(Modifier.height(8.dp))
+                    Text("Seu Cloud PC,\nsem atalhos falsos.", color = Color.White, fontSize = 27.sp, lineHeight = 31.sp, fontWeight = FontWeight.ExtraBold)
+                    Spacer(Modifier.height(8.dp))
+                    Text("O painel mostra apenas máquinas registradas pelo provedor conectado.", color = Muted, fontSize = 13.sp)
+                }
+            }
+        }
+        item {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("MEUS CLOUD PCS", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                Text("${machines.size} PC(s)", color = Cyan, fontSize = 12.sp)
+            }
+        }
+        if (machines.isEmpty()) {
+            item {
+                Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(20.dp)) {
+                    Column(Modifier.fillMaxWidth().padding(22.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(Icons.Default.Cloud, null, tint = Cyan, modifier = Modifier.size(36.dp))
+                        Spacer(Modifier.height(10.dp))
+                        Text("Nenhum Cloud PC provisionado", color = Color.White, fontWeight = FontWeight.Bold)
+                        Spacer(Modifier.height(5.dp))
+                        Text("Pareie o aplicativo com a sua API e conecte um provedor de infraestrutura para criar a primeira máquina.", color = Muted, fontSize = 12.sp)
+                        Spacer(Modifier.height(14.dp))
+                        Button(onClick = onSettings, colors = ButtonDefaults.buttonColors(containerColor = Panel2)) { Text("Configurar conexão") }
+                    }
+                }
+            }
+        }
+        items(machines, key = { it.id }) { machine ->
+            MachineCard(machine, onAction, onDelete, onConnect)
+        }
+        item {
+            Button(onClick = onCreate, modifier = Modifier.fillMaxWidth().height(54.dp), shape = RoundedCornerShape(16.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent), contentPadding = PaddingValues(0.dp), enabled = !busy) {
+                Box(Modifier.fillMaxSize().background(Brush.horizontalGradient(listOf(Blue, Purple))), contentAlignment = Alignment.Center) {
+                    Text("＋  CRIAR CLOUD PC", color = Color.White, fontWeight = FontWeight.ExtraBold, letterSpacing = 1.sp)
+                }
+            }
+        }
+        item {
+            Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF0F1C34)), shape = RoundedCornerShape(16.dp), border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF1C5265))) {
+                Row(Modifier.padding(15.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Terminal, null, tint = Cyan)
+                    Spacer(Modifier.width(10.dp))
+                    Column {
+                        Text("Infraestrutura real", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        Text(catalog?.providerMessage ?: "Configure a API para consultar o provedor.", color = Muted, fontSize = 11.sp)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MachineCard(machine: CloudMachine, onAction: (CloudMachine, String) -> Unit, onDelete: (CloudMachine) -> Unit, onConnect: (String) -> Unit) {
+    val running = machine.state.equals("running", true)
+    val stateColor = if (running) Good else if (machine.state == "provisioning" || machine.state == "starting") Cyan else Color(0xFFFFB76B)
+    Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(20.dp), border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF27345C))) {
+        Column(Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(machine.name, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 17.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(machine.os, color = Muted, fontSize = 12.sp)
+                }
+                Surface(color = stateColor.copy(alpha = .13f), shape = CircleShape, border = androidx.compose.foundation.BorderStroke(1.dp, stateColor.copy(alpha = .5f))) {
+                    Text(machine.state.uppercase(), color = stateColor, fontSize = 10.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp))
+                }
+            }
+            Spacer(Modifier.height(14.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Metric("CPU", "${machine.cpu} vCPU", Modifier.weight(1f))
+                Metric("RAM", "${machine.ram} GB", Modifier.weight(1f))
+                Metric("SSD", "${machine.disk} GB", Modifier.weight(1f))
+            }
+            Spacer(Modifier.height(10.dp))
+            Text("GPU  ${machine.gpu}", color = Cyan, fontSize = 12.sp)
+            if (machine.errorMessage.isNotBlank()) Text(machine.errorMessage, color = Color(0xFFFFA0AA), fontSize = 11.sp, modifier = Modifier.padding(top = 8.dp))
+            if (machine.connectionUrl.isNotBlank()) {
+                Spacer(Modifier.height(14.dp))
+                Button(onClick = { onConnect(machine.connectionUrl) }, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = Blue)) { Text("CONECTAR AO PC", fontWeight = FontWeight.Bold) }
+            } else {
+                Text("Conexão remota ainda não configurada no servidor.", color = Muted, fontSize = 11.sp, modifier = Modifier.padding(top = 11.dp))
+            }
+            Spacer(Modifier.height(9.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = { onAction(machine, if (running) "stop" else "start") }, modifier = Modifier.weight(1f), enabled = machine.providerReady) {
+                    Text(if (running) "Desligar" else "Ligar")
+                }
+                OutlinedButton(onClick = { onDelete(machine) }, enabled = machine.state == "error" || machine.providerReady, colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFFF8C9B))) { Text("Excluir") }
+            }
+        }
+    }
+}
+
+@Composable
+private fun Metric(label: String, value: String, modifier: Modifier = Modifier) {
+    Column(modifier.clip(RoundedCornerShape(12.dp)).background(Panel2).padding(10.dp)) {
+        Text(label, color = Muted, fontSize = 10.sp)
+        Text(value, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+    }
+}
+
+@Composable
+private fun CreatePage(catalog: Catalog?, busy: Boolean, onCreate: (String, String, Int, Int, Int, String) -> Unit, onConfigure: () -> Unit) {
+    var name by remember { mutableStateOf("Meu Cloud PC") }
+    var os by remember { mutableStateOf("windows-11-pro") }
+    var cpu by remember { mutableIntStateOf(8) }
+    var ram by remember { mutableIntStateOf(16) }
+    var disk by remember { mutableIntStateOf(250) }
+    var gpu by remember { mutableStateOf("none") }
+    val osOptions = catalog?.os?.ifEmpty { defaultOs } ?: defaultOs
+    val gpuOptions = catalog?.gpus?.ifEmpty { listOf(GpuOption("none", "Sem GPU")) } ?: listOf(GpuOption("none", "Sem GPU"))
+    val ready = catalog?.providerReady == true
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text("CONFIGURAR CLOUD PC", color = Cyan, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
+        Text("Monte sua máquina", color = Color.White, fontSize = 26.sp, fontWeight = FontWeight.ExtraBold)
+        Text("As opções são enviadas ao provedor. A criação só acontece quando a infraestrutura estiver configurada.", color = Muted, fontSize = 12.sp)
+        OutlinedTextField(name, { name = it }, label = { Text("Nome do PC") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+        SelectField("Windows", osOptions.map { it.first to it.second }, os, { os = it })
+        SelectField("CPU", (catalog?.cpu?.ifEmpty { listOf(4, 8, 16) } ?: listOf(4, 8, 16)).map { it.toString() to "$it vCPU" }, cpu.toString(), { cpu = it.toInt() })
+        SelectField("Memória RAM", (catalog?.ram?.ifEmpty { listOf(8, 16, 32, 64) } ?: listOf(8, 16, 32, 64)).map { it.toString() to "$it GB" }, ram.toString(), { ram = it.toInt() })
+        SelectField("Armazenamento SSD", (catalog?.disk?.ifEmpty { listOf(100, 250, 500, 1000, 2000) } ?: listOf(100, 250, 500, 1000, 2000)).map { it.toString() to if (it >= 1000) "${it / 1000} TB" else "$it GB" }, disk.toString(), { disk = it.toInt() })
+        SelectField("GPU disponível no servidor", gpuOptions.map { it.id to it.label }, gpu, { gpu = it })
+        if (!ready) {
+            Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF2B2118)), shape = RoundedCornerShape(14.dp)) {
+                Text(catalog?.providerMessage ?: "A API ainda não confirmou um provedor operacional. Configure o backend primeiro.", color = Color(0xFFFFD19A), fontSize = 12.sp, modifier = Modifier.padding(14.dp))
+            }
+        }
+        Button(onClick = { onCreate(name.trim(), os, cpu, ram, disk, gpu) }, enabled = !busy && ready && name.isNotBlank(), modifier = Modifier.fillMaxWidth().height(52.dp), colors = ButtonDefaults.buttonColors(containerColor = Blue)) {
+            Text(if (busy) "ENVIANDO SOLICITAÇÃO..." else "PROVISIONAR CLOUD PC", fontWeight = FontWeight.Bold)
+        }
+        if (!ready) TextButton(onClick = onConfigure, modifier = Modifier.fillMaxWidth()) { Text("Configurar servidor e parear dispositivo") }
+    }
+}
+
+private val defaultOs = listOf("windows-11" to "Windows 11", "windows-11-pro" to "Windows 11 Pro", "windows-11-enterprise" to "Windows 11 Enterprise")
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SelectField(label: String, options: List<Pair<String, String>>, selected: String, onSelect: (String) -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    val current = options.firstOrNull { it.first == selected }?.second ?: selected
+    ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = !expanded }) {
+        OutlinedTextField(value = current, onValueChange = {}, readOnly = true, label = { Text(label) }, trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) }, modifier = Modifier.menuAnchor().fillMaxWidth())
+        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            options.forEach { item -> DropdownMenuItem(text = { Text(item.second) }, onClick = { onSelect(item.first); expanded = false }) }
+        }
+    }
+}
+
+@Composable
+private fun SettingsPage(baseUrl: String, paired: Boolean, busy: Boolean, onPair: (String, String) -> Unit, onUnpair: () -> Unit) {
+    var pairingCode by remember { mutableStateOf("") }
+    var url by remember(baseUrl) { mutableStateOf(baseUrl) }
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        Text("CONEXÃO SEGURA", color = Cyan, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
+        Text("Conecte sua infraestrutura", color = Color.White, fontSize = 25.sp, fontWeight = FontWeight.ExtraBold)
+        Text("Informe o endereço HTTPS da NEVOZ API e use o código de pareamento gerado no servidor. A chave do Proxmox nunca fica no APK.", color = Muted, fontSize = 12.sp)
+        OutlinedTextField(url, { url = it }, label = { Text("URL HTTPS da API") }, placeholder = { Text("https://cloud.seudominio.com") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+        OutlinedTextField(pairingCode, { pairingCode = it }, label = { Text("Código de pareamento") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+        Button(onClick = { onPair(url.trim().trimEnd('/'), pairingCode) }, enabled = !busy && url.startsWith("https://") && pairingCode.isNotBlank(), modifier = Modifier.fillMaxWidth().height(50.dp), colors = ButtonDefaults.buttonColors(containerColor = Blue)) {
+            Text(if (busy) "PAREANDO..." else if (paired) "PAREAR OUTRO DISPOSITIVO" else "PAREAR DISPOSITIVO", fontWeight = FontWeight.Bold)
+        }
+        if (paired) OutlinedButton(onClick = onUnpair, modifier = Modifier.fillMaxWidth()) { Text("Desconectar este dispositivo") }
+        Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(16.dp)) {
+            Column(Modifier.padding(15.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                Text("SEGURANÇA", color = Cyan, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                Text("• Use HTTPS válido.\n• O código de pareamento só é usado para registrar o dispositivo.\n• O app recebe um token de dispositivo revogável.\n• Credenciais e tokens do provedor permanecem no servidor.", color = Muted, fontSize = 12.sp)
+            }
+        }
     }
 }
