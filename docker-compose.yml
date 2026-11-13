@@ -1,55 +1,18 @@
 services:
-  postgres:
-    image: postgres:17-alpine
-    container_name: ezergg-postgres
+  nevoz-api:
+    build: ./server
+    container_name: nevoz-setup-api
     restart: unless-stopped
     environment:
-      POSTGRES_DB: ezergg
-      POSTGRES_USER: ezergg
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ezergg_dev_password}
-    volumes:
-      - ezergg_postgres:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ezergg -d ezergg"]
-      interval: 5s
-      timeout: 5s
-      retries: 15
-
-  redis:
-    image: redis:7-alpine
-    container_name: ezergg-redis
-    restart: unless-stopped
-    command: ["redis-server", "--appendonly", "yes"]
-    volumes:
-      - ezergg_redis:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-
-  api:
-    build:
-      context: ./apps/api
-    container_name: ezergg-api
-    restart: unless-stopped
-    environment:
-      ENVIRONMENT: ${ENVIRONMENT:-development}
-      DATABASE_URL: postgresql+psycopg://ezergg:${POSTGRES_PASSWORD:-ezergg_dev_password}@postgres:5432/ezergg
-      JWT_SECRET: ${JWT_SECRET:-dev-only-change-this-secret-before-deploy}
-      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173,capacitor://localhost,https://localhost,http://localhost}
-      PROVIDER: ${PROVIDER:-mock}
-      AUTO_CREATE_DB: ${AUTO_CREATE_DB:-true}
-      STREAMING_URL: ${STREAMING_URL:-}
-      LIBVIRT_URI: ${LIBVIRT_URI:-qemu:///system}
+      PORT: "3001"
+      DB_PATH: "/data/nevoz.sqlite"
+      API_TOKEN: "${API_TOKEN:?Defina API_TOKEN no arquivo .env}"
+      CORS_ORIGIN: "${CORS_ORIGIN:-}"
     ports:
-      - "8000:8000"
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
+      - "3001:3001"
+    volumes:
+      - nevoz_data:/data
 
 volumes:
-  ezergg_postgres:
-  ezergg_redis:
+  nevoz_data:
+    name: nevoz_setup_persistent_data

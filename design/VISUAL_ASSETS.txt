@@ -1,0 +1,19 @@
+NEVOZ SETUP visual assets
+nevoz_action_pack.png
+nevoz_app_concept_generated.png
+nevoz_background.png
+nevoz_cosmic_generated.png
+nevoz_cosmic_wallpaper.png
+nevoz_dashboard_visual.png
+nevoz_decor_pack.png
+nevoz_decor_strip.png
+nevoz_floating_icons.png
+nevoz_graphics_generated.png
+nevoz_login_visual.png
+nevoz_logo_concept_generated.png
+nevoz_splash_art.png
+nevoz_ui_concept.png
+nevoz_ui_generated.png
+nevoz_visual_collage.png
+nevoz_visual_pack.png
+nevoz_wallpaper_dark.png
